@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sprite-dialogue": {
+      "command": "bun",
+      "args": ["run", "--cwd", "/home/sprite/sprite-dialogue", "--silent", "start"]
+    }
+  }
+}
