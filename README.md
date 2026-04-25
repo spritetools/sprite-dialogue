@@ -24,8 +24,8 @@ cd /home/sprite/sprite-dialogue && bun install
 Then restart Claude Code with channel flags:
 
 ```
-claude --dangerously-load-development-channels server:sprite-dialogue \
-       --mcp-config /home/sprite/sprite-dialogue/mcp-direct.json
+claude --dangerously-load-development-channels plugin:sprite-dialogue@inline \
+       --plugin-dir /home/sprite/sprite-dialogue
 ```
 
 The server picks a port deterministically from the Sprite's hostname (range 30000–39999), so multiple Sprites running sprite-dialogue won't collide on `localhost` when forwarded to your laptop. After Claude Code starts, find the URL:
@@ -50,7 +50,7 @@ Runtime state at `~/.claude/channels/sprite-dialogue/{inbox,outbox}/`.
 
 ## Status
 
-Working but rough around the edges — see [TODO.md](./TODO.md) for known issues and planned enhancements. Channel notifications currently require loading via `--mcp-config` rather than `--plugin-dir`; the proper plugin-install path needs more investigation.
+Working but rough around the edges — see [TODO.md](./TODO.md) for known issues and planned enhancements.
 
 ## License
 

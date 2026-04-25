@@ -7,7 +7,7 @@ Small enhancements and known issues to address.
 - [x] Pass original filename through channel meta as `file_name`
 - [ ] Auto-restart the bun server on file changes during development (consider `bun --hot server.ts` or watch flag)
 - [ ] Add a connection status indicator that's more visible (the 8px dot is subtle)
-- [ ] When loaded as a plugin (`--plugin-dir`), channel notifications don't reach Claude. Investigate the right plugin/marketplace tagging so the plugin form can be used in production
+- [x] Plugin path (`--plugin-dir`) confirmed working for channels — the fix was using the right dev-flag tag: `plugin:sprite-dialogue@inline` (not `server:sprite-dialogue`). The "inline" marketplace name is what `--plugin-dir` synthesizes.
 
 ## Known Issues
 
