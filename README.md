@@ -26,7 +26,7 @@ Built on top of [Claude Code's channels API](https://code.claude.com/docs/en/cha
 Inside Claude Code on the Sprite:
 
 ```
-/plugin marketplace add github:rphilander/sprite-dialogue
+/plugin marketplace add rphilander/sprite-dialogue
 /plugin install sprite-dialogue@sprite-dialogue
 ```
 
@@ -35,6 +35,13 @@ Then exit and relaunch Claude with the channel flag:
 ```
 claude --dangerously-load-development-channels plugin:sprite-dialogue@sprite-dialogue
 ```
+
+## Repository layout
+
+This repo is both the marketplace and the plugin. The plugin lives in the
+[`plugin/`](./plugin) subdirectory; `.claude-plugin/marketplace.json` at the
+root declares it. To run from a local clone (e.g. for development), point
+`--plugin-dir` at the `plugin/` subdirectory, not the repo root.
 
 The server picks a port deterministically from the Sprite's hostname (range 30000–39999), so multiple Sprites running sprite-dialogue won't collide on `localhost` when forwarded to your laptop. After Claude Code starts, find the URL:
 
