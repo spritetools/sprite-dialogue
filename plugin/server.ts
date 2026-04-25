@@ -284,10 +284,12 @@ function deliver(id: string, text: string, file?: { path: string; name: string }
 killOrphans()
 watchParent()
 
-// Project-root preview: serve files from the parent of cwd (the repo root,
-// since cwd is the plugin subdir). Hidden files and path traversal blocked.
-// Markdown links like `[label](/project/root/docs/index.html)` resolve here.
-const PROJECT_ROOT = resolve(process.env.SPRITE_DIALOGUE_PROJECT_ROOT ?? join(process.cwd(), '..'))
+// Project-root preview: serve files under the user's home directory by default.
+// A Sprite is itself the sandbox — anything sensitive belongs in a different
+// Sprite — so $HOME is the natural scope. Override with SPRITE_DIALOGUE_PROJECT_ROOT
+// if you want a tighter root. Hidden files and path traversal blocked either way.
+// Markdown links like `[label](/project/root/some-repo/docs/index.html)` resolve here.
+const PROJECT_ROOT = resolve(process.env.SPRITE_DIALOGUE_PROJECT_ROOT ?? homedir())
 
 function hasHiddenSegment(rel: string): boolean {
   return rel.split('/').some(seg => seg.startsWith('.'))
