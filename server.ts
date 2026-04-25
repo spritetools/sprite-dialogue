@@ -13,7 +13,7 @@ import {
   CallToolRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync, appendFileSync } from 'fs'
-import { homedir } from 'os'
+import { homedir, hostname } from 'os'
 import { join, extname, basename } from 'path'
 import type { ServerWebSocket } from 'bun'
 
@@ -32,7 +32,19 @@ function log(msg: string) {
 // Config
 // ---------------------------------------------------------------------------
 
-const PORT = Number(process.env.SPRITE_DIALOGUE_PORT ?? 4242)
+// Port is derived from hostname (the sprite name) so each sprite gets a
+// distinct port, avoiding collisions on the user's laptop where multiple
+// sprites' ports are forwarded simultaneously. Range 30000-39999 sits
+// outside common dev port ranges.
+function hashHostnameToPort(host: string, min = 30000, max = 39999): number {
+  let h = 5381  // djb2
+  for (let i = 0; i < host.length; i++) {
+    h = ((h << 5) + h + host.charCodeAt(i)) | 0
+  }
+  return min + (Math.abs(h) % (max - min + 1))
+}
+
+const PORT = Number(process.env.SPRITE_DIALOGUE_PORT ?? hashHostnameToPort(hostname()))
 const STATE_DIR = join(homedir(), '.claude', 'channels', 'sprite-dialogue')
 const INBOX_DIR = join(STATE_DIR, 'inbox')
 const OUTBOX_DIR = join(STATE_DIR, 'outbox')
@@ -318,7 +330,10 @@ Bun.serve({
   },
 })
 
-log(`sprite-dialogue: http://0.0.0.0:${PORT} (logs at ${LOG_FILE})`)
+const URL_FILE = '/tmp/sprite-dialogue-url'
+const url = `http://localhost:${PORT}`
+try { writeFileSync(URL_FILE, url + '\n') } catch {}
+log(`sprite-dialogue: ${url} (logs at ${LOG_FILE}, url at ${URL_FILE})`)
 
 // ---------------------------------------------------------------------------
 // Embedded HTML

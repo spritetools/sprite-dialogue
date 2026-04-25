@@ -28,7 +28,15 @@ claude --dangerously-load-development-channels server:sprite-dialogue \
        --mcp-config /home/sprite/sprite-dialogue/mcp-direct.json
 ```
 
-Open `http://localhost:4242` in your laptop browser. (Sprites auto-forward bound ports; no `sprite proxy` needed when running `sprite console`.)
+The server picks a port deterministically from the Sprite's hostname (range 30000–39999), so multiple Sprites running sprite-dialogue won't collide on `localhost` when forwarded to your laptop. After Claude Code starts, find the URL:
+
+```bash
+cat /tmp/sprite-dialogue-url
+```
+
+Open that URL in your laptop browser. (Sprites auto-forward bound ports; no `sprite proxy` needed when running `sprite console`.)
+
+To override the port explicitly, set `SPRITE_DIALOGUE_PORT` before launching Claude.
 
 ## Architecture
 
