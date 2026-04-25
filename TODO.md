@@ -11,6 +11,7 @@ Small enhancements and known issues to address.
 - [ ] Clear the input box: Escape key when focused, plus a clear button next to/inside the textarea
 - [ ] Chime on turn completion — when an assistant turn ends (no further tool calls pending), play a short sound in the UI so the user is notified that a long-running turn is done. Should be muteable.
 - [ ] Header in upper-left showing `<sprite-name>:<claude-session-name>`, mirrored into the page `<title>` so it's visible in the browser tab too
+- [ ] Copy button on rendered code blocks — small icon in the corner of each `<pre>`/`<code>` block in markdown-rendered messages, clicks to copy the block contents to the clipboard
 
 ## Known Issues
 
