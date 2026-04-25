@@ -26,7 +26,7 @@ Built on top of [Claude Code's channels API](https://code.claude.com/docs/en/cha
 Inside Claude Code on the Sprite:
 
 ```
-/plugin marketplace add rphilander/sprite-dialogue
+/plugin marketplace add spritetools/sprite-dialogue
 /plugin install sprite-dialogue@sprite-dialogue
 /reload-plugins
 ```

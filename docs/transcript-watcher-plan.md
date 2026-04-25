@@ -235,7 +235,7 @@ from this Sprite's hostname).
    - On the MacBook: `sprite create dialogue-test2 && sprite use dialogue-test2 && sprite console`.
    - In Claude on the new Sprite:
      ```
-     /plugin marketplace add rphilander/sprite-dialogue
+     /plugin marketplace add spritetools/sprite-dialogue
      /plugin install sprite-dialogue@sprite-dialogue
      /reload-plugins
      ```
@@ -265,7 +265,7 @@ to copy).
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 EOF
 )"
-git push "https://x-access-token:$(cat .gh-token)@github.com/rphilander/sprite-dialogue.git" main:main
+git push "https://x-access-token:$(cat .gh-token)@github.com/spritetools/sprite-dialogue.git" main:main
 sprite-env checkpoints create --comment "sprite-dialogue: transcript watcher replaces hooks; race fix shipped"
 ```
 

@@ -2,7 +2,7 @@
 
 A two-way visual chat channel for Claude Code, designed for iterating on web UIs from a [Sprite](https://sprites.dev). The user runs Claude Code in a Sprite terminal and views/uses a parallel web UI in their laptop browser. Screenshots and text flow both directions; Claude's text responses are mirrored to the UI; the user can paste/drop screenshots into the UI and Claude reads them as channel notifications.
 
-GitHub: <https://github.com/rphilander/sprite-dialogue>
+GitHub: <https://github.com/spritetools/sprite-dialogue>
 
 ## Repo layout
 
@@ -26,7 +26,7 @@ The repo serves two roles: a single-plugin marketplace (root) and the plugin its
 
 - Installed plugin (the "real" path):
   ```
-  /plugin marketplace add rphilander/sprite-dialogue
+  /plugin marketplace add spritetools/sprite-dialogue
   /plugin install sprite-dialogue@sprite-dialogue
   /reload-plugins
   ```
@@ -67,7 +67,7 @@ No hooks. The previous Stop / UserPromptSubmit hooks were racing the JSONL flush
 - Author identity: `Rodrigo Philander <rodrigo.philander@gmail.com>`.
 - Push pattern (token from gitignored `.gh-token`):
   ```
-  git push "https://x-access-token:$(cat .gh-token)@github.com/rphilander/sprite-dialogue.git" main:main
+  git push "https://x-access-token:$(cat .gh-token)@github.com/spritetools/sprite-dialogue.git" main:main
   ```
 - Sprite checkpoints via `sprite-env checkpoints create --comment "..."` after milestones.
 - README tells users to install via the plugin commands; only mention `--plugin-dir` for local dev.
