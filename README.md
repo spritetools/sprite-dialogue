@@ -7,12 +7,19 @@ You sit in your laptop browser. Claude Code runs in the Sprite terminal. The dia
 ## What it does
 
 - **From you** → screenshots and text into Claude's session via clipboard paste, drag-and-drop, or file picker
-- **From Claude** → text replies and image attachments rendered inline in the chat UI
+- **From Claude** → conversational text is automatically mirrored to the UI by plugin hooks (no tool calls needed); images go via a `send_image` tool
 - **Image lightbox** for full-size viewing
 - **Auto-scroll** that respects manual scroll-back
 - **Outbound queue** so messages don't drop during WebSocket reconnects
 
-Built on top of [Claude Code's channels API](https://code.claude.com/docs/en/channels-reference).
+Built on top of [Claude Code's channels API](https://code.claude.com/docs/en/channels-reference) and [hooks](https://code.claude.com/docs/en/hooks).
+
+## Architecture
+
+- **Inbound (you → Claude)**: UI WebSocket → channel notification → Claude session
+- **Outbound text (Claude → you)**: `Stop` hook reads the JSONL transcript, POSTs the last assistant turn to the server's `/echo` endpoint, broadcast to UI WebSocket
+- **Outbound images (Claude → you)**: `send_image` tool with absolute file path
+- **Terminal user input**: `UserPromptSubmit` hook captures the prompt, POSTs to `/echo` so the UI shows what was typed in the terminal too
 
 ## Quickstart on a Sprite
 

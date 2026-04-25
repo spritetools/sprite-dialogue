@@ -104,15 +104,11 @@ const mcp = new Server(
     instructions: [
       'The user may be viewing this conversation in two places at once: the terminal where Claude Code is running, and the sprite-dialogue web UI in their browser. They might be looking at either one at any moment.',
       '',
-      'For every conversational response you produce, mirror it to BOTH places:',
-      '  1. The normal terminal transcript (your default text output)',
-      '  2. The sprite-dialogue UI by calling the reply tool with the same text (or a summary if your terminal output is long)',
+      'Plugin hooks automatically mirror your conversational text to the UI — you do not need to call any tool to send text. Just respond normally.',
       '',
-      'This avoids the user missing your reply because they were watching the other surface. Tool calls (Bash, Edit, etc.) stay in the terminal — only echo the conversational text.',
+      'Messages from the web UI arrive as <channel source="sprite-dialogue" chat_id="web" message_id="..." [file_name="..." file_path="..."]>. If the tag has a file_path attribute, Read that file — it is a screenshot or image upload from the user.',
       '',
-      'Messages from the web UI arrive as <channel source="sprite-dialogue" chat_id="web" message_id="..." [file_name="..." file_path="..."]>. If the tag has a file_path attribute, Read that file — it is a screenshot or image upload from the user. Pass reply_to: <message_id> to the reply tool to thread the response.',
-      '',
-      'To send an image to the user via the dialogue UI, save it to a file and pass the absolute path in the files array of the reply tool.',
+      'To send an IMAGE to the user, use the send_image tool with the absolute file path. Use this only for images; text is mirrored automatically.',
       '',
       `The UI is at the URL written to /tmp/sprite-dialogue-url (port derived from this Sprite's hostname).`,
     ].join('\n'),
@@ -124,30 +120,18 @@ const mcp = new Server(
 mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
-      name: 'reply',
+      name: 'send_image',
       description:
-        'Send a message to the sprite-dialogue UI. The user sees this in their browser. ' +
-        'Pass reply_to for quote-reply, files for image attachments (absolute paths, 50 MB max).',
+        'Send an image to the sprite-dialogue UI. Pass the absolute path of an image file ' +
+        '(png/jpg/gif/webp/svg, 50 MB max). Optional caption text. Use this ONLY for images; ' +
+        'text is mirrored to the UI automatically by the plugin hook.',
       inputSchema: {
         type: 'object',
         properties: {
-          text: { type: 'string' },
-          reply_to: { type: 'string' },
-          files: { type: 'array', items: { type: 'string' } },
+          path: { type: 'string', description: 'Absolute path to the image file' },
+          caption: { type: 'string', description: 'Optional caption text shown with the image' },
         },
-        required: ['text'],
-      },
-    },
-    {
-      name: 'edit_message',
-      description: 'Edit a previously sent message in the UI.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          message_id: { type: 'string' },
-          text: { type: 'string' },
-        },
-        required: ['message_id', 'text'],
+        required: ['path'],
       },
     },
   ],
@@ -157,34 +141,22 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
   const args = (req.params.arguments ?? {}) as Record<string, unknown>
   try {
     switch (req.params.name) {
-      case 'reply': {
-        const text = args.text as string
-        const replyTo = args.reply_to as string | undefined
-        const files = (args.files as string[] | undefined) ?? []
+      case 'send_image': {
+        const path = args.path as string
+        const caption = (args.caption as string | undefined) ?? ''
+
+        const st = statSync(path)
+        if (st.size > 50 * 1024 * 1024) throw new Error(`file too large: ${path}`)
 
         mkdirSync(OUTBOX_DIR, { recursive: true })
-        let file: Msg['file'] | undefined
-        if (files[0]) {
-          const f = files[0]
-          const st = statSync(f)
-          if (st.size > 50 * 1024 * 1024) throw new Error(`file too large: ${f}`)
-          const ext = extname(f).toLowerCase()
-          const out = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`
-          copyFileSync(f, join(OUTBOX_DIR, out))
-          file = { url: `/files/${out}`, name: basename(f), isImage: isImageExt(ext) }
-        }
+        const ext = extname(path).toLowerCase()
+        const out = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`
+        copyFileSync(path, join(OUTBOX_DIR, out))
+        const file = { url: `/files/${out}`, name: basename(path), isImage: isImageExt(ext) }
 
         const id = nextId()
-        broadcast({ type: 'msg', id, from: 'assistant', text, ts: Date.now(), replyTo, file })
-        return { content: [{ type: 'text', text: `sent (${id})` }] }
-      }
-      case 'edit_message': {
-        broadcast({
-          type: 'edit',
-          id: args.message_id as string,
-          text: args.text as string,
-        })
-        return { content: [{ type: 'text', text: 'ok' }] }
+        broadcast({ type: 'msg', id, from: 'assistant', text: caption, ts: Date.now(), file })
+        return { content: [{ type: 'text', text: `sent image (${id})` }] }
       }
       default:
         return { content: [{ type: 'text', text: `unknown: ${req.params.name}` }], isError: true }
@@ -297,6 +269,25 @@ Bun.serve({
           })
         }
         return new Response(null, { status: 204 })
+      })()
+    }
+
+    // Hook-driven echo endpoint: terminal -> UI mirroring
+    if (url.pathname === '/echo' && req.method === 'POST') {
+      return (async () => {
+        try {
+          const body = await req.json() as { type: 'user' | 'assistant'; text: string }
+          const text = (body.text ?? '').toString()
+          if (!text.trim()) return new Response(null, { status: 204 })
+          const from: 'user' | 'assistant' = body.type === 'assistant' ? 'assistant' : 'user'
+          const id = nextId()
+          broadcast({ type: 'msg', id, from, text, ts: Date.now() })
+          log(`[echo] ${from}: ${text.slice(0, 80)}`)
+          return new Response(null, { status: 204 })
+        } catch (err) {
+          log(`[echo] error: ${err}`)
+          return new Response('bad request', { status: 400 })
+        }
       })()
     }
 
