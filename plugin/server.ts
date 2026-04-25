@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync, appendF
 import { homedir, hostname } from 'os'
 import { join, extname, basename, resolve } from 'path'
 import type { ServerWebSocket } from 'bun'
+import { marked } from 'marked'
 
 // ---------------------------------------------------------------------------
 // Logging — append to a file so we can debug message drops
@@ -292,6 +293,30 @@ function hasHiddenSegment(rel: string): boolean {
   return rel.split('/').some(seg => seg.startsWith('.'))
 }
 
+function renderMarkdown(absPath: string, urlPath: string): string {
+  const md = readFileSync(absPath, 'utf-8')
+  const html = marked.parse(md, { breaks: true, gfm: true, async: false }) as string
+  return `<!doctype html><meta charset="utf-8"><title>${urlPath}</title>
+<style>
+  body{font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#222;max-width:760px;margin:2em auto;padding:0 1.5em}
+  h1,h2,h3,h4{line-height:1.25;margin-top:1.5em}
+  h1{font-size:2em;border-bottom:1px solid #eee;padding-bottom:.3em}
+  h2{font-size:1.5em;border-bottom:1px solid #eee;padding-bottom:.3em}
+  a{color:#06c} a:hover{text-decoration:underline}
+  code{font:.9em ui-monospace,SFMono-Regular,Menlo,monospace;background:#f5f5f5;padding:.1em .3em;border-radius:3px}
+  pre{background:#f5f5f5;padding:1em;border-radius:6px;overflow-x:auto}
+  pre code{background:none;padding:0}
+  blockquote{border-left:4px solid #ddd;padding:0 1em;color:#555;margin:1em 0}
+  table{border-collapse:collapse;margin:1em 0}
+  th,td{border:1px solid #ddd;padding:.4em .8em} th{background:#f5f5f5}
+  img{max-width:100%}
+  hr{border:0;border-top:1px solid #eee;margin:2em 0}
+  .raw-link{position:fixed;top:.5em;right:.8em;font-size:.8em;color:#888;text-decoration:none}
+</style>
+<a class="raw-link" href="?raw=1">view raw</a>
+<article>${html}</article>`
+}
+
 function renderListing(absDir: string, urlPath: string): string {
   const at = urlPath.endsWith('/') ? urlPath : urlPath + '/'
   const entries = readdirSync(absDir, { withFileTypes: true })
@@ -346,7 +371,14 @@ Bun.serve({
           headers: { 'content-type': 'text/html; charset=utf-8' },
         })
       }
-      if (st.isFile()) return new Response(Bun.file(abs))
+      if (st.isFile()) {
+        if (extname(abs).toLowerCase() === '.md' && url.searchParams.get('raw') !== '1') {
+          return new Response(renderMarkdown(abs, url.pathname), {
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          })
+        }
+        return new Response(Bun.file(abs))
+      }
       return new Response('404', { status: 404 })
     }
 

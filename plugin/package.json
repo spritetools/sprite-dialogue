@@ -8,7 +8,8 @@
     "start": "BUN_TMPDIR=$PWD/.bun-tmp bun install --no-summary && bun server.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "marked": "^12.0.0"
   },
   "devDependencies": {
     "@types/bun": "^1.3.10"
