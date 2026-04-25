@@ -14,7 +14,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import { readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync, appendFileSync, readdirSync, readlinkSync, existsSync, openSync, readSync, closeSync } from 'fs'
 import { homedir, hostname } from 'os'
-import { join, extname, basename } from 'path'
+import { join, extname, basename, resolve } from 'path'
 import type { ServerWebSocket } from 'bun'
 
 // ---------------------------------------------------------------------------
@@ -283,6 +283,34 @@ function deliver(id: string, text: string, file?: { path: string; name: string }
 killOrphans()
 watchParent()
 
+// Project-root preview: serve files from the parent of cwd (the repo root,
+// since cwd is the plugin subdir). Hidden files and path traversal blocked.
+// Markdown links like `[label](/project/root/docs/index.html)` resolve here.
+const PROJECT_ROOT = resolve(process.env.SPRITE_DIALOGUE_PROJECT_ROOT ?? join(process.cwd(), '..'))
+
+function hasHiddenSegment(rel: string): boolean {
+  return rel.split('/').some(seg => seg.startsWith('.'))
+}
+
+function renderListing(absDir: string, urlPath: string): string {
+  const at = urlPath.endsWith('/') ? urlPath : urlPath + '/'
+  const entries = readdirSync(absDir, { withFileTypes: true })
+    .filter(e => !e.name.startsWith('.'))
+    .sort((a, b) => {
+      const ad = a.isDirectory() ? 0 : 1, bd = b.isDirectory() ? 0 : 1
+      return ad !== bd ? ad - bd : a.name.localeCompare(b.name)
+    })
+  const isRoot = at === '/project/root/'
+  const upRow = isRoot ? '' : `<li><a href="${at.replace(/[^/]+\/$/, '')}">../</a></li>`
+  const rows = entries.map(e => {
+    const slash = e.isDirectory() ? '/' : ''
+    return `<li><a href="${at}${encodeURIComponent(e.name)}${slash}">${e.name}${slash}</a></li>`
+  }).join('')
+  return `<!doctype html><meta charset="utf-8"><title>${urlPath}</title>
+<style>body{font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;padding:1.5em;max-width:780px;margin:auto;color:#222}h1{font-size:1em;font-weight:600;color:#666;margin:0 0 1em}ul{list-style:none;padding:0;margin:0}li{padding:1px 0}a{text-decoration:none;color:#06c}a:hover{text-decoration:underline}</style>
+<h1>${urlPath}</h1><ul>${upRow}${rows}</ul>`
+}
+
 Bun.serve({
   port: PORT,
   hostname: '0.0.0.0',
@@ -294,6 +322,32 @@ Bun.serve({
     if (url.pathname === '/ws') {
       if (server.upgrade(req)) return
       return new Response('upgrade failed', { status: 400 })
+    }
+
+    // Project root preview — serve repo files for in-browser inspection
+    if (url.pathname === '/project/root' || url.pathname.startsWith('/project/root/')) {
+      const rel = decodeURIComponent(url.pathname.slice('/project/root'.length).replace(/^\//, ''))
+      if (hasHiddenSegment(rel)) return new Response('forbidden', { status: 403 })
+      const abs = resolve(PROJECT_ROOT, rel)
+      if (abs !== PROJECT_ROOT && !abs.startsWith(PROJECT_ROOT + '/')) {
+        return new Response('forbidden', { status: 403 })
+      }
+      let st
+      try { st = statSync(abs) } catch { return new Response('404', { status: 404 }) }
+      if (st.isDirectory()) {
+        if (!url.pathname.endsWith('/')) {
+          return new Response(null, { status: 301, headers: { location: url.pathname + '/' } })
+        }
+        const indexPath = join(abs, 'index.html')
+        if (existsSync(indexPath)) {
+          return new Response(Bun.file(indexPath))
+        }
+        return new Response(renderListing(abs, url.pathname), {
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        })
+      }
+      if (st.isFile()) return new Response(Bun.file(abs))
+      return new Response('404', { status: 404 })
     }
 
     // Serve outbox files (Claude -> user images)
@@ -910,6 +964,10 @@ function addMessage(m) {
     body.className = 'msg-md'
     const rendered = marked.parse(m.text, { breaks: true, gfm: true })
     body.innerHTML = DOMPurify.sanitize(rendered)
+    body.querySelectorAll('a[href^="/project/root/"]').forEach(a => {
+      a.setAttribute('target', '_blank')
+      a.setAttribute('rel', 'noopener')
+    })
   } else {
     body.className = 'msg-text'
     body.textContent = m.text || ''
