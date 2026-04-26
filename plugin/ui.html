@@ -175,18 +175,21 @@
     position: absolute;
     top: 0.3rem;
     right: 0.3rem;
-    font-family: inherit;
-    font-size: 0.7rem;
     background: rgba(0,0,0,0.4);
     color: var(--text-muted);
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 0.1rem 0.4rem;
+    padding: 0.25rem;
     cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     transition: color 0.2s, background 0.2s, border-color 0.2s;
   }
+  .copy-btn svg { width: 14px; height: 14px; display: block; }
   .copy-btn:hover { color: var(--text); background: rgba(0,0,0,0.6); }
   .copy-btn.copied { color: var(--ok); border-color: var(--ok); }
+  .copy-btn.failed { color: var(--err); border-color: var(--err); }
   .msg-md a { color: var(--accent-hi); text-decoration: underline; }
   .msg-md blockquote {
     border-left: 3px solid var(--border-2);
@@ -606,6 +609,9 @@ function addMessage(m) {
 // Wrap each rendered code block in a positioning container and inject a small
 // copy-to-clipboard button. Idempotent — safe to call repeatedly on the same
 // container (already-wrapped pres are skipped).
+const COPY_ICON = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M2.5 10.5 V3.5 a1 1 0 0 1 1 -1 H10.5"/></svg>`
+const CHECK_ICON = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3,8 7,12 13,4"/></svg>`
+
 function addCopyButtons(container) {
   container.querySelectorAll('pre').forEach(pre => {
     if (pre.parentElement && pre.parentElement.classList.contains('code-block')) return
@@ -617,7 +623,7 @@ function addCopyButtons(container) {
     btn.type = 'button'
     btn.className = 'copy-btn'
     btn.title = 'Copy to clipboard'
-    btn.textContent = 'copy'
+    btn.innerHTML = COPY_ICON
     btn.onclick = () => copyCode(btn, pre)
     wrap.appendChild(btn)
   })
@@ -625,20 +631,20 @@ function addCopyButtons(container) {
 
 function copyCode(btn, pre) {
   const text = pre.textContent || ''
-  const flash = (label, klass) => {
-    btn.textContent = label
-    if (klass) btn.classList.add(klass)
+  const flash = (icon, klass) => {
+    btn.innerHTML = icon
+    btn.classList.add(klass)
     setTimeout(() => {
-      btn.textContent = 'copy'
-      if (klass) btn.classList.remove(klass)
+      btn.innerHTML = COPY_ICON
+      btn.classList.remove(klass)
     }, 1200)
   }
   if (navigator.clipboard && navigator.clipboard.writeText) {
     navigator.clipboard.writeText(text)
-      .then(() => flash('copied', 'copied'))
-      .catch(() => flash('failed'))
+      .then(() => flash(CHECK_ICON, 'copied'))
+      .catch(() => flash(COPY_ICON, 'failed'))
   } else {
-    flash('failed')
+    flash(COPY_ICON, 'failed')
   }
 }
 
