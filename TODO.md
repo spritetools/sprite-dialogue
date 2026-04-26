@@ -6,6 +6,7 @@ Small enhancements and known issues to address.
 
 - [x] Pass original filename through channel meta as `file_name`
 - [ ] Auto-restart the bun server on file changes during development (consider `bun --hot server.ts` or watch flag)
+- [ ] Robust testing harness for the activity-tracking edge cases. Manual restart-and-poke iteration was hitting diminishing returns by 2026-04-26 — the remaining bugs (intermittent missed bubbles after restart, the "thinking…" not always appearing, tool/text/tool sequencing surprises) all live in subtle state-machine transitions across JSONL entry types: synthetic vs real assistant, meta-injection user entries, tool_use multi-block entries, end_turn placement, mid-burst restart timing, mid-burst tab refresh, etc. Need a fixtures-driven test set on top of `bun test` that simulates JSONL append patterns and asserts on the resulting `nextActivity` state and broadcast sequence, plus a way to drive the WebSocket layer end-to-end for the reconnect / backfill paths. Some current `nextActivity` tests are the right shape; expand coverage rather than continuing to find bugs by hand.
 - [ ] Add a connection status indicator that's more visible (the 8px dot is subtle)
 - [x] Plugin path (`--plugin-dir`) confirmed working for channels — the fix was using the right dev-flag tag: `plugin:sprite-dialogue@inline` (not `server:sprite-dialogue`). The "inline" marketplace name is what `--plugin-dir` synthesizes.
 - [ ] Clear the input box: Escape key when focused, plus a clear button next to/inside the textarea
