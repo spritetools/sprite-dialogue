@@ -511,14 +511,31 @@ log(`sprite-dialogue: ${url} (logs at ${LOG_FILE}, url at ${URL_FILE})`)
 // Stop / UserPromptSubmit hook scripts (which raced the JSONL flush).
 // ---------------------------------------------------------------------------
 
-// Resolve our project's transcripts dir from claude's cwd. claude (our parent)
-// indexes ~/.claude/projects/<encoded-cwd>/, where encoded = cwd with '/' → '-'.
-// Reading /proc/<ppid>/cwd gives us claude's cwd, not bun's (bun runs from
-// the plugin dir under .mcp.json's CLAUDE_PLUGIN_ROOT).
+// Resolve our project's transcripts dir from claude's cwd. claude indexes
+// ~/.claude/projects/<encoded-cwd>/, where encoded = cwd with '/' → '-'.
+//
+// Walking process.ppid alone is wrong: the npm-script start chain inserts a
+// `bun run start` parent between bun and claude, and that intermediate's cwd
+// is the plugin dir (CLAUDE_PLUGIN_ROOT), not claude's cwd. So we walk the
+// process tree up to ~8 levels looking for the first ancestor whose argv[0]
+// basename is `claude`, then read /proc/<that-pid>/cwd.
+function resolveClaudeCwd(): string {
+  let pid = process.ppid
+  for (let i = 0; i < 8 && pid > 1; i++) {
+    try {
+      const argv0 = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')[0] ?? ''
+      if ((argv0.split('/').pop() ?? '') === 'claude') {
+        return readlinkSync(`/proc/${pid}/cwd`)
+      }
+      const m = readFileSync(`/proc/${pid}/status`, 'utf8').match(/^PPid:\s+(\d+)/m)
+      pid = m ? parseInt(m[1], 10) : 0
+    } catch { break }
+  }
+  return process.cwd()
+}
+
 function resolveProjectDir(): string {
-  let cwd = process.cwd()
-  try { cwd = readlinkSync(`/proc/${process.ppid}/cwd`) } catch {}
-  return join(homedir(), '.claude', 'projects', cwd.replace(/\//g, '-'))
+  return join(homedir(), '.claude', 'projects', resolveClaudeCwd().replace(/\//g, '-'))
 }
 
 const PROJECT_DIR = resolveProjectDir()
