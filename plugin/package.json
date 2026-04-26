@@ -5,7 +5,8 @@
   "type": "module",
   "main": "server.ts",
   "scripts": {
-    "start": "BUN_TMPDIR=$PWD/.bun-tmp bun install --no-summary && bun server.ts"
+    "start": "BUN_TMPDIR=$PWD/.bun-tmp bun install --no-summary && bun server.ts",
+    "test": "bun test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
