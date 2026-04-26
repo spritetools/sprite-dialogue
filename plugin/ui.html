@@ -3,16 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sprite-dialogue</title>
+<title>{{SPRITE_NAME}} · sprite-dialogue</title>
 <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <style>
+  /* Warm-dark palette — derived from the spritetools.github.io brand orange.
+     Cool grays from the original Tailwind palette swapped for warm grays so
+     the orange accent reads as native rather than imposed. */
+  :root {
+    --bg: #1a1612;
+    --card: #26201b;
+    --border: #3a3128;
+    --border-2: #574838;
+    --text: #f0e9e0;
+    --text-2: #d4c8b8;
+    --text-muted: #8a7d6e;
+    --accent: #e2733e;        /* brand orange */
+    --accent-hi: #f29368;     /* lighter — links, hover-brighten */
+    --accent-down: #c95f2a;   /* darker — primary button press */
+    --user-bubble: #a85725;   /* dark warm orange — user message bg */
+    --drop-overlay-bg: rgba(226, 115, 62, 0.18);
+    --ok: #22c55e;
+    --err: #ef4444;
+  }
+
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    background: #111827;
-    color: #e5e7eb;
+    background: var(--bg);
+    color: var(--text);
     height: 100vh;
     display: flex;
     flex-direction: column;
@@ -24,17 +44,17 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.625rem 1rem;
-    background: #1f2937;
-    border-bottom: 1px solid #374151;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
   }
-  header h1 { font-size: 0.875rem; font-weight: 600; }
+  header h1 { font-size: 0.875rem; font-weight: 600; color: var(--accent); }
   #status {
     width: 8px; height: 8px; border-radius: 50%;
-    background: #ef4444;
+    background: var(--err);
     transition: background 0.3s;
   }
-  #status.connected { background: #22c55e; }
+  #status.connected { background: var(--ok); }
 
   /* -- Messages -- */
   #messages {
@@ -56,12 +76,12 @@
   }
   .msg-assistant {
     align-self: flex-start;
-    background: #1f2937;
-    border: 1px solid #374151;
+    background: var(--card);
+    border: 1px solid var(--border);
   }
   .msg-user {
     align-self: flex-end;
-    background: #1d4ed8;
+    background: var(--user-bubble);
   }
 
   .msg-meta {
@@ -109,16 +129,16 @@
     border-radius: 0;
     font-size: 1em;
   }
-  .msg-md a { color: #93c5fd; text-decoration: underline; }
+  .msg-md a { color: var(--accent-hi); text-decoration: underline; }
   .msg-md blockquote {
-    border-left: 3px solid #4b5563;
+    border-left: 3px solid var(--border-2);
     margin: 0.375rem 0;
     padding: 0 0.75rem;
     opacity: 0.85;
   }
   .msg-md hr {
     border: none;
-    border-top: 1px solid #374151;
+    border-top: 1px solid var(--border);
     margin: 0.625rem 0;
   }
   .msg-md table {
@@ -127,7 +147,7 @@
     font-size: 0.875em;
   }
   .msg-md th, .msg-md td {
-    border: 1px solid #374151;
+    border: 1px solid var(--border);
     padding: 0.25rem 0.5rem;
   }
   .msg-md strong { font-weight: 600; }
@@ -135,7 +155,7 @@
   .msg-reply-quote {
     font-size: 0.75rem;
     opacity: 0.6;
-    border-left: 2px solid #6b7280;
+    border-left: 2px solid var(--text-muted);
     padding-left: 0.5rem;
     margin-bottom: 0.375rem;
     max-height: 2.5em;
@@ -154,7 +174,7 @@
   .msg-file-link {
     display: inline-block;
     margin-top: 0.375rem;
-    color: #93c5fd;
+    color: var(--accent-hi);
     text-decoration: underline;
   }
 
@@ -162,14 +182,14 @@
   #drop-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(29, 78, 216, 0.25);
+    background: var(--drop-overlay-bg);
     display: none;
     align-items: center;
     justify-content: center;
     font-size: 1.25rem;
     font-weight: 600;
-    color: #93c5fd;
-    border: 3px dashed #3b82f6;
+    color: var(--accent-hi);
+    border: 3px dashed var(--accent);
     z-index: 100;
     pointer-events: none;
   }
@@ -178,8 +198,8 @@
   /* -- Compose -- */
   #compose {
     flex-shrink: 0;
-    background: #1f2937;
-    border-top: 1px solid #374151;
+    background: var(--card);
+    border-top: 1px solid var(--border);
     padding: 0.75rem 1rem;
   }
 
@@ -189,7 +209,7 @@
     gap: 0.5rem;
     margin-bottom: 0.5rem;
     padding: 0.375rem;
-    background: #374151;
+    background: var(--border);
     border-radius: 8px;
   }
   #preview-bar.active { display: flex; }
@@ -201,7 +221,7 @@
   }
   #preview-name { font-size: 0.75rem; opacity: 0.7; flex: 1; }
   #preview-remove {
-    background: none; border: none; color: #ef4444;
+    background: none; border: none; color: var(--err);
     font-size: 1rem; cursor: pointer; padding: 0.25rem;
   }
 
@@ -214,10 +234,10 @@
   #text {
     flex: 1;
     resize: none;
-    border: 1px solid #374151;
+    border: 1px solid var(--border);
     border-radius: 8px;
-    background: #111827;
-    color: #e5e7eb;
+    background: var(--bg);
+    color: var(--text);
     font: inherit;
     font-size: 0.875rem;
     padding: 0.5rem 0.75rem;
@@ -225,7 +245,7 @@
     max-height: 8rem;
     outline: none;
   }
-  #text:focus { border-color: #3b82f6; }
+  #text:focus { border-color: var(--accent); }
 
   #compose-actions {
     display: flex;
@@ -235,21 +255,21 @@
 
   .btn {
     background: none;
-    border: 1px solid #4b5563;
-    color: #d1d5db;
+    border: 1px solid var(--border-2);
+    color: var(--text-2);
     border-radius: 6px;
     padding: 0.375rem 0.625rem;
     font-size: 0.8125rem;
     cursor: pointer;
     white-space: nowrap;
   }
-  .btn:hover { background: #374151; }
+  .btn:hover { background: var(--border); }
   .btn-primary {
-    background: #2563eb;
-    border-color: #2563eb;
+    background: var(--accent);
+    border-color: var(--accent);
     color: #fff;
   }
-  .btn-primary:hover { background: #1d4ed8; }
+  .btn-primary:hover { background: var(--accent-down); border-color: var(--accent-down); }
 
   #file-input { display: none; }
 
@@ -274,7 +294,7 @@
 <body>
 
 <header>
-  <h1>sprite-dialogue</h1>
+  <h1>{{SPRITE_NAME}}</h1>
   <div id="status"></div>
 </header>
 

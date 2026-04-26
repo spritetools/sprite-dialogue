@@ -15,6 +15,7 @@ import {
 import { readFileSync, writeFileSync, mkdirSync, statSync, copyFileSync, appendFileSync, readdirSync, readlinkSync, existsSync, openSync, readSync, closeSync } from 'fs'
 import { homedir, hostname } from 'os'
 import { join, extname, basename, resolve } from 'path'
+import { execSync } from 'child_process'
 import type { ServerWebSocket } from 'bun'
 import { marked } from 'marked'
 import { type ChatMsg, entryToMessage, parseEntries } from './transcript'
@@ -635,7 +636,25 @@ startTranscriptWatcher()
 
 // ---------------------------------------------------------------------------
 // Embedded HTML — kept in ui.html for editor highlighting and easier diffing.
-// Loaded once at startup; not hot-reloaded.
+// Loaded once at startup with template substitution; not hot-reloaded.
 // ---------------------------------------------------------------------------
 
+// Look up the sprite name via `sprite-env info`; fall back to hostname() if
+// the CLI is missing or fails. Used for the header title so the user can
+// tell tabs apart when running multiple Sprites at once.
+function getSpriteName(): string {
+  try {
+    const out = execSync('sprite-env info', { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] })
+    const info = JSON.parse(out)
+    if (typeof info.sprite_name === 'string' && info.sprite_name) return info.sprite_name
+  } catch { /* fall through */ }
+  return hostname()
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
+}
+
+const SPRITE_NAME = getSpriteName()
 const HTML = readFileSync(join(import.meta.dir, 'ui.html'), 'utf8')
+  .replaceAll('{{SPRITE_NAME}}', escapeHtml(SPRITE_NAME))
