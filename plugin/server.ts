@@ -461,11 +461,18 @@ Bun.serve({
       clients.delete(ws)
       log(`[ws] close (clients=${clients.size})`)
     },
-    message: (_, raw) => {
+    message: (ws, raw) => {
       const rawStr = String(raw)
-      log(`[ws] message received: ${rawStr.slice(0, 120)}`)
       try {
-        const { id, text } = JSON.parse(rawStr) as { id: string; text: string }
+        const parsed = JSON.parse(rawStr)
+        // App-layer heartbeat: client probes liveness by sending {type:'ping'},
+        // expects {type:'pong'} back within a short window.
+        if (parsed?.type === 'ping') {
+          try { ws.send(JSON.stringify({ type: 'pong' })) } catch {}
+          return
+        }
+        log(`[ws] message received: ${rawStr.slice(0, 120)}`)
+        const { id, text } = parsed as { id: string; text: string }
         if (id && text?.trim()) {
           deliver(id, text.trim())
         } else {
@@ -534,6 +541,18 @@ function isChannelText(s: string): boolean {
   return s.trimStart().startsWith('<channel source=')
 }
 
+// Slash-command artifacts that claude writes into the transcript as user
+// entries — meta for claude's own consumption, not chat content. Examples:
+// <command-name>/exit</command-name>, <local-command-stdout>...</...>,
+// <local-command-caveat>...</...>. Filter so they don't pollute the UI.
+function isLocalCommandArtifact(s: string): boolean {
+  const t = s.trimStart()
+  return t.startsWith('<local-command-') ||
+         t.startsWith('<command-name>') ||
+         t.startsWith('<command-message>') ||
+         t.startsWith('<command-args>')
+}
+
 function extractText(content: any): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -556,6 +575,7 @@ function processEntry(entry: any): void {
     const text = extractText(entry.message.content).trim()
     if (!text) return
     if (isChannelText(text)) return  // already shown in UI as the original send
+    if (isLocalCommandArtifact(text)) return  // slash-command meta, not chat
     broadcast({ type: 'msg', id: nextId(), from: 'user', text, ts: Date.now() })
     log(`[transcript] echoed user: ${text.slice(0, 80).replace(/\n/g, ' ')}`)
   }
@@ -930,10 +950,22 @@ let pendingObjectUrl = null
 let uid = 0
 
 // ---------------------------------------------------------------------------
-// WebSocket with auto-reconnect and outbound queue
+// WebSocket with auto-reconnect, outbound queue, and liveness probing
 // ---------------------------------------------------------------------------
+// App-layer heartbeat: send {type:'ping'} every PING_INTERVAL_MS, expect a
+// {type:'pong'} within PONG_TIMEOUT_MS. Catches half-open sockets that the
+// transport layer doesn't notice (laptop sleep, NAT eviction, etc.). The
+// 25s/5s pair gives a worst-case detection latency of ~30s while staying
+// well under common idle-timeout policies (NATs, proxies, load balancers
+// at 60s+) and well above typical RTT/jitter.
+const PING_INTERVAL_MS = 25_000
+const PONG_TIMEOUT_MS = 5_000
+
 let ws = null
 let reconnectDelay = 500
+let reconnectTimer = null
+let pingTimer = null
+let pongTimer = null
 const outboundQueue = []  // messages to send once WS is open
 
 function wsSend(payload) {
@@ -953,7 +985,29 @@ function flushQueue() {
   }
 }
 
+function startPings() {
+  stopPings()
+  pingTimer = setInterval(() => {
+    if (!ws || ws.readyState !== 1) return
+    try { ws.send(JSON.stringify({ type: 'ping' })) }
+    catch (err) { console.warn('ping send failed:', err); return }
+    if (pongTimer) clearTimeout(pongTimer)
+    pongTimer = setTimeout(() => {
+      // No pong within the budget — connection is dead. Force-close so onclose
+      // fires and the existing reconnect path runs.
+      console.warn('no pong within ' + PONG_TIMEOUT_MS + 'ms, forcing reconnect')
+      try { ws.close(4000, 'no-pong') } catch {}
+    }, PONG_TIMEOUT_MS)
+  }, PING_INTERVAL_MS)
+}
+
+function stopPings() {
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null }
+  if (pongTimer) { clearTimeout(pongTimer); pongTimer = null }
+}
+
 function connect() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   ws = new WebSocket(proto + '//' + location.host + '/ws')
 
@@ -961,20 +1015,39 @@ function connect() {
     statusEl.classList.add('connected')
     reconnectDelay = 500
     flushQueue()
+    startPings()
   }
 
   ws.onclose = () => {
     statusEl.classList.remove('connected')
-    setTimeout(connect, reconnectDelay)
+    stopPings()
+    reconnectTimer = setTimeout(connect, reconnectDelay)
     reconnectDelay = Math.min(reconnectDelay * 2, 8000)
   }
 
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data)
+    if (m.type === 'pong') {
+      if (pongTimer) { clearTimeout(pongTimer); pongTimer = null }
+      return
+    }
     if (m.type === 'msg') addMessage(m)
     if (m.type === 'edit') editMessage(m.id, m.text)
   }
 }
+
+// On tab becoming visible, if we're not connected, reconnect immediately
+// (skip the backoff). This is the fast path for laptop-wake / tab-refocus —
+// otherwise we'd wait up to PING_INTERVAL_MS + PONG_TIMEOUT_MS for the
+// liveness probe to notice the dead socket.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return
+  if (ws && ws.readyState === 1) return
+  if (ws && (ws.readyState === 0 || ws.readyState === 2)) return
+  reconnectDelay = 500
+  connect()
+})
+
 connect()
 
 // ---------------------------------------------------------------------------
