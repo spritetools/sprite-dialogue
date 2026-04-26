@@ -5,6 +5,9 @@ import {
   extractText,
   entryToMessage,
   parseEntries,
+  nextActivity,
+  IDLE_ACTIVITY,
+  type Activity,
 } from './transcript'
 
 describe('isChannelText', () => {
@@ -195,5 +198,104 @@ describe('parseEntries', () => {
     const out = parseEntries([valid, channelEcho, valid2].join('\n'))
     expect(out).toHaveLength(2)
     expect(out.map(m => m.id)).toEqual(['a1', 'u1'])
+  })
+})
+
+describe('nextActivity', () => {
+  const userEntry = (overrides: any = {}) => ({
+    type: 'user',
+    message: { content: 'hello' },
+    ...overrides,
+  })
+  const assistantEntry = (content: any[], stop: string | null = 'end_turn') => ({
+    type: 'assistant',
+    message: { content, stop_reason: stop },
+  })
+  const toolUse = (name: string, input: any) => ({ type: 'tool_use', name, input })
+  const text = (s: string) => ({ type: 'text', text: s })
+  const toolResult = (s: string) => ({ type: 'tool_result', content: s })
+
+  test('plain user entry transitions idle → busy', () => {
+    const next = nextActivity(IDLE_ACTIVITY, userEntry())
+    expect(next.state).toBe('busy')
+    expect(next.toolCallCount).toBe(0)
+    expect(next.latestTool).toBeNull()
+  })
+
+  test('tool_result user entry leaves state unchanged', () => {
+    const busy: Activity = { state: 'busy', toolCallCount: 2, latestTool: { name: 'Bash', summary: 'ls' } }
+    const next = nextActivity(busy, userEntry({ message: { content: [toolResult('ok')] } }))
+    expect(next).toBe(busy)  // same reference — no change
+  })
+
+  test('assistant tool_use blocks increment count and update latestTool', () => {
+    const a = nextActivity(IDLE_ACTIVITY, assistantEntry([toolUse('Bash', { command: 'ls -la' })], 'tool_use'))
+    expect(a.state).toBe('busy')
+    expect(a.toolCallCount).toBe(1)
+    expect(a.latestTool).toEqual({ name: 'Bash', summary: 'ls -la' })
+
+    const b = nextActivity(a, assistantEntry([toolUse('Read', { file_path: '/tmp/x.txt' })], 'tool_use'))
+    expect(b.toolCallCount).toBe(2)
+    expect(b.latestTool).toEqual({ name: 'Read', summary: '/tmp/x.txt' })
+  })
+
+  test('multiple tool_use blocks in one entry are all counted', () => {
+    const next = nextActivity(IDLE_ACTIVITY, assistantEntry([
+      toolUse('Bash', { command: 'ls' }),
+      toolUse('Read', { file_path: '/x' }),
+      toolUse('Grep', { pattern: 'foo' }),
+    ], 'tool_use'))
+    expect(next.toolCallCount).toBe(3)
+    expect(next.latestTool).toEqual({ name: 'Grep', summary: 'foo' })
+  })
+
+  test('end_turn assistant entry resets to idle', () => {
+    const busy: Activity = { state: 'busy', toolCallCount: 5, latestTool: { name: 'Bash', summary: 'x' } }
+    const next = nextActivity(busy, assistantEntry([text('done')], 'end_turn'))
+    expect(next).toEqual({ state: 'idle', toolCallCount: 0, latestTool: null })
+  })
+
+  test('end_turn from already-idle returns same reference', () => {
+    const next = nextActivity(IDLE_ACTIVITY, assistantEntry([text('hi')], 'end_turn'))
+    expect(next).toBe(IDLE_ACTIVITY)
+  })
+
+  test('plain user entry while already busy returns same reference', () => {
+    const busy: Activity = { state: 'busy', toolCallCount: 3, latestTool: null }
+    const next = nextActivity(busy, userEntry())
+    expect(next).toBe(busy)
+  })
+
+  test('falls back to JSON.stringify for unknown tool inputs', () => {
+    const next = nextActivity(IDLE_ACTIVITY, assistantEntry([
+      toolUse('UnknownTool', { foo: 'bar', n: 42 }),
+    ], 'tool_use'))
+    expect(next.latestTool?.summary).toBe('{"foo":"bar","n":42}')
+  })
+
+  test('tool_use with no key field uses JSON.stringify', () => {
+    const next = nextActivity(IDLE_ACTIVITY, assistantEntry([
+      toolUse('Bash', { /* no command */ unexpected: 'x' }),
+    ], 'tool_use'))
+    expect(next.latestTool?.summary).toBe('{"unexpected":"x"}')
+  })
+
+  test('non-object input yields empty summary', () => {
+    const next = nextActivity(IDLE_ACTIVITY, assistantEntry([
+      toolUse('Bash', null),
+    ], 'tool_use'))
+    expect(next.latestTool?.summary).toBe('')
+  })
+
+  test('non-end_turn stop_reason (e.g. max_tokens) holds busy', () => {
+    const next = nextActivity(IDLE_ACTIVITY, assistantEntry([text('x')], 'max_tokens'))
+    expect(next.state).toBe('busy')
+  })
+
+  test('malformed entry returns same reference', () => {
+    expect(nextActivity(IDLE_ACTIVITY, null)).toBe(IDLE_ACTIVITY)
+    expect(nextActivity(IDLE_ACTIVITY, undefined)).toBe(IDLE_ACTIVITY)
+    expect(nextActivity(IDLE_ACTIVITY, 'string')).toBe(IDLE_ACTIVITY)
+    expect(nextActivity(IDLE_ACTIVITY, {})).toBe(IDLE_ACTIVITY)
   })
 })

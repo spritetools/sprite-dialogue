@@ -77,3 +77,98 @@ export function parseEntries(content: string): ChatMsg[] {
   }
   return out
 }
+
+// ---------------------------------------------------------------------------
+// Activity tracking — drives the "claude is working" indicator in the UI.
+//
+// BUSY rules (match the design discussion):
+//   1. Most recent assistant entry's stop_reason ≠ "end_turn" → busy
+//   2. A non-tool-result user entry newer than the most recent end_turn → busy
+//      (covers the window where the user has spoken but claude hasn't yet
+//      flushed its response to the JSONL — claude only writes at turn end).
+//
+// IDLE means: most recent assistant entry has stop_reason = "end_turn" AND
+// no newer non-tool-result user entries.
+// ---------------------------------------------------------------------------
+
+export type Activity = {
+  state: 'busy' | 'idle'
+  toolCallCount: number  // count of tool_use blocks since the last end_turn
+  latestTool: { name: string; summary: string } | null
+}
+
+export const IDLE_ACTIVITY: Activity = { state: 'idle', toolCallCount: 0, latestTool: null }
+
+// Per-tool: which input field is the most useful to show as a one-line summary.
+// Anything not listed here falls through to JSON.stringify(input).
+const TOOL_KEY_FIELDS: Record<string, string> = {
+  Bash: 'command',
+  Read: 'file_path',
+  Edit: 'file_path',
+  Write: 'file_path',
+  NotebookEdit: 'file_path',
+  Grep: 'pattern',
+  Glob: 'pattern',
+  WebFetch: 'url',
+  WebSearch: 'query',
+}
+
+function summarizeToolInput(name: string, input: any): string {
+  if (!input || typeof input !== 'object') return ''
+  const key = TOOL_KEY_FIELDS[name]
+  if (key) {
+    const v = input[key]
+    if (typeof v === 'string') return v
+  }
+  try { return JSON.stringify(input) } catch { return '' }
+}
+
+// Pure transition: given current activity state and the next JSONL entry,
+// return the next activity. Returns the SAME object reference when nothing
+// visible changed, so callers can cheaply dedupe broadcasts via `next !== prev`.
+export function nextActivity(current: Activity, entry: any): Activity {
+  if (!entry || typeof entry !== 'object' || !entry.type) return current
+
+  if (entry.type === 'user' && entry.message) {
+    const content = entry.message.content
+    const isToolResult = Array.isArray(content) && content.some((b: any) => b?.type === 'tool_result')
+    // Tool-result user entries are continuations of an in-progress burst, not
+    // fresh prompts — they don't transition state on their own.
+    if (isToolResult) return current
+    if (current.state === 'busy') return current
+    return { state: 'busy', toolCallCount: 0, latestTool: null }
+  }
+
+  if (entry.type === 'assistant' && entry.message) {
+    let next = current
+
+    if (Array.isArray(entry.message.content)) {
+      for (const block of entry.message.content) {
+        if (block?.type === 'tool_use') {
+          if (next === current) next = { ...current }
+          next.toolCallCount = next.toolCallCount + 1
+          next.latestTool = {
+            name: String(block.name ?? '?'),
+            summary: summarizeToolInput(block.name, block.input),
+          }
+          next.state = 'busy'
+        }
+      }
+    }
+
+    const stop = entry.message.stop_reason
+    if (stop === 'end_turn') {
+      if (next.state !== 'idle' || next.toolCallCount !== 0 || next.latestTool !== null) {
+        return { state: 'idle', toolCallCount: 0, latestTool: null }
+      }
+      return current
+    } else if (stop && next.state !== 'busy') {
+      if (next === current) next = { ...current }
+      next.state = 'busy'
+    }
+
+    return next
+  }
+
+  return current
+}

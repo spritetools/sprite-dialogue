@@ -18,7 +18,7 @@ import { join, extname, basename, resolve } from 'path'
 import { execSync } from 'child_process'
 import type { ServerWebSocket } from 'bun'
 import { marked } from 'marked'
-import { type ChatMsg, entryToMessage, parseEntries } from './transcript'
+import { type ChatMsg, entryToMessage, parseEntries, type Activity, IDLE_ACTIVITY, nextActivity } from './transcript'
 
 // ---------------------------------------------------------------------------
 // Logging — append to a file so we can debug message drops
@@ -468,7 +468,11 @@ Bun.serve({
         ws.send(JSON.stringify({ type: 'snapshot-start', count: snap.length }))
         for (const m of snap) ws.send(JSON.stringify({ type: 'msg', ...m }))
         ws.send(JSON.stringify({ type: 'snapshot-end' }))
-        log(`[ws] backfilled ${snap.length} messages`)
+        // Tell the new client about any in-progress burst so the activity
+        // indicator can render immediately rather than waiting for the next
+        // JSONL event to come through.
+        ws.send(JSON.stringify(activityMessage()))
+        log(`[ws] backfilled ${snap.length} messages, activity=${activity.state}`)
       } catch (err) {
         log(`[ws] backfill error: ${err}`)
       }
@@ -572,7 +576,29 @@ function readNewBytes(path: string): string | null {
   } catch { return null }
 }
 
+// Activity state for the busy/idle indicator. Reassigned through nextActivity()
+// — referential identity is the change signal, so equality checks dedupe trivially.
+let activity: Activity = IDLE_ACTIVITY
+
+function activityMessage(): Record<string, unknown> {
+  return activity.state === 'idle'
+    ? { type: 'activity', state: 'idle' }
+    : {
+        type: 'activity',
+        state: 'busy',
+        toolCallCount: activity.toolCallCount,
+        latestTool: activity.latestTool,
+      }
+}
+
 function processEntry(entry: any): void {
+  // Activity must be updated for *every* entry (including tool turns and user
+  // text), even when the entry doesn't produce a visible chat message.
+  const next = nextActivity(activity, entry)
+  if (next !== activity) {
+    activity = next
+    broadcast(activityMessage())
+  }
   const msg = entryToMessage(entry)
   if (!msg) return
   broadcast({ type: 'msg', ...msg })

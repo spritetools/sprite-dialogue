@@ -118,6 +118,54 @@
     border-bottom-right-radius: 4px;
   }
 
+  /* Activity bubble — singleton ephemeral bubble shown while claude is mid-burst.
+     Visually distinct from real bubbles: dashed orange border, faint orange
+     wash, slow opacity pulse. Updated in place by updateActivity(); removed
+     entirely on idle (its content was a status, not a record). */
+  .msg-activity {
+    align-self: flex-start;
+    background: rgba(226, 115, 62, 0.10);
+    border: 1px dashed var(--accent);
+    border-bottom-left-radius: 4px;
+    color: var(--text-2);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: 0.8125rem;
+    animation: activity-pulse 2.2s ease-in-out infinite;
+  }
+  @keyframes activity-pulse {
+    0%, 100% { opacity: 0.78; }
+    50%      { opacity: 1; }
+  }
+  .activity-text { display: flex; align-items: center; gap: 0.4rem; min-width: 0; flex: 1; }
+  .activity-count { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .activity-tool {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  .activity-bell {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0.15rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .activity-bell svg { width: 14px; height: 14px; display: block; }
+  .activity-bell:hover { color: var(--text); background: rgba(0,0,0,0.25); }
+  .activity-bell.armed { color: var(--accent); }
+  .activity-bell.armed:hover { color: var(--accent-hi); }
+
   .msg-meta {
     font-size: 0.6875rem;
     opacity: 0.5;
@@ -518,6 +566,7 @@ function connect() {
     if (m.type === 'snapshot-end') { inSnapshot = false; scrollToBottom(); return }
     if (m.type === 'msg') addMessage(m)
     if (m.type === 'edit') editMessage(m.id, m.text)
+    if (m.type === 'activity') updateActivity(m)
   }
 }
 
@@ -611,6 +660,8 @@ function addMessage(m) {
 // container (already-wrapped pres are skipped).
 const COPY_ICON = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M2.5 10.5 V3.5 a1 1 0 0 1 1 -1 H10.5"/></svg>`
 const CHECK_ICON = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3,8 7,12 13,4"/></svg>`
+const BELL_OUTLINE = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 V3"/><path d="M3.5 12 V8 a4.5 4.5 0 0 1 9 0 V12 H3.5 Z"/><path d="M2.5 12 H13.5"/><path d="M6.5 13.5 a1.5 1.5 0 0 0 3 0"/></svg>`
+const BELL_FILLED = `<svg viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2 V3" fill="none"/><path d="M3.5 12 V8 a4.5 4.5 0 0 1 9 0 V12 H3.5 Z"/><path d="M2.5 12 H13.5" fill="none"/><path d="M6.5 13.5 a1.5 1.5 0 0 0 3 0" fill="none"/></svg>`
 
 function addCopyButtons(container) {
   container.querySelectorAll('pre').forEach(pre => {
@@ -646,6 +697,107 @@ function copyCode(btn, pre) {
   } else {
     flash(COPY_ICON, 'failed')
   }
+}
+
+// ---------------------------------------------------------------------------
+// Activity bubble — singleton "claude is working" indicator. Driven by
+// {type:'activity', state:'busy'|'idle', toolCallCount, latestTool} messages
+// from the server. Bubble is created lazily and removed on idle.
+// ---------------------------------------------------------------------------
+let activityBubble = null
+let activityArmed = false
+let activityState = 'idle'
+
+function updateActivity(m) {
+  const wasBusy = activityState === 'busy'
+  activityState = m.state
+  if (m.state === 'busy') {
+    showActivity(m.toolCallCount || 0, m.latestTool || null)
+  } else {
+    hideActivity()
+    if (wasBusy && activityArmed) {
+      activityArmed = false
+      playChime()
+    }
+  }
+}
+
+function showActivity(count, latestTool) {
+  // Don't render the bubble until there's something useful to say. Pure
+  // text-only turns flip BUSY → IDLE without ever calling a tool, and a bare
+  // "0 tool calls" bubble would just flash and vanish.
+  if (count === 0 && !latestTool) return
+
+  if (!activityBubble) {
+    activityBubble = document.createElement('div')
+    activityBubble.className = 'msg msg-activity'
+    const text = document.createElement('div')
+    text.className = 'activity-text'
+    const countEl = document.createElement('span')
+    countEl.className = 'activity-count'
+    text.appendChild(countEl)
+    const toolEl = document.createElement('span')
+    toolEl.className = 'activity-tool'
+    text.appendChild(toolEl)
+    activityBubble.appendChild(text)
+    const bell = document.createElement('button')
+    bell.type = 'button'
+    bell.className = 'activity-bell'
+    bell.title = 'Notify when done'
+    bell.innerHTML = BELL_OUTLINE
+    bell.onclick = toggleArmed
+    activityBubble.appendChild(bell)
+    const wasNearBottom = isNearBottom()
+    messagesEl.appendChild(activityBubble)
+    if (wasNearBottom && !inSnapshot) scrollToBottom()
+  }
+
+  const countEl = activityBubble.querySelector('.activity-count')
+  const toolEl = activityBubble.querySelector('.activity-tool')
+  countEl.textContent = count + ' tool ' + (count === 1 ? 'call' : 'calls')
+  toolEl.textContent = latestTool ? '· ' + latestTool.name + ': ' + truncate(latestTool.summary, 40) : ''
+}
+
+function hideActivity() {
+  if (activityBubble) {
+    activityBubble.remove()
+    activityBubble = null
+  }
+}
+
+function toggleArmed() {
+  activityArmed = !activityArmed
+  if (activityBubble) {
+    const bell = activityBubble.querySelector('.activity-bell')
+    bell.innerHTML = activityArmed ? BELL_FILLED : BELL_OUTLINE
+    bell.classList.toggle('armed', activityArmed)
+  }
+}
+
+function truncate(s, n) {
+  if (!s) return ''
+  return s.length > n ? s.slice(0, n - 1) + '…' : s
+}
+
+// Brief synthesized "ding" via Web Audio. The user's click on the bell counts
+// as the activation gesture, so the autoplay policy doesn't block us.
+function playChime() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    if (!Ctx) return
+    const ctx = new Ctx()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.frequency.value = 880  // A5
+    const t = ctx.currentTime
+    gain.gain.setValueAtTime(0.001, t)
+    gain.gain.exponentialRampToValueAtTime(0.25, t + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.55)
+    osc.start(t)
+    osc.stop(t + 0.6)
+  } catch (err) { console.warn('chime failed:', err) }
 }
 
 function editMessage(id, text) {
