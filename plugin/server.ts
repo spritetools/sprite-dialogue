@@ -456,6 +456,20 @@ Bun.serve({
     open: (ws) => {
       clients.add(ws)
       log(`[ws] open (clients=${clients.size})`)
+      // Replay recent transcript history to this client only. Bracket with
+      // snapshot markers so the UI can suppress per-message auto-scroll
+      // during the bulk-append, and rely on client-side msgMap dedupe (keyed
+      // by uuid) to collapse any overlap with a live broadcast that might
+      // fire mid-replay.
+      try {
+        const snap = buildBackfill()
+        ws.send(JSON.stringify({ type: 'snapshot-start', count: snap.length }))
+        for (const m of snap) ws.send(JSON.stringify({ type: 'msg', ...m }))
+        ws.send(JSON.stringify({ type: 'snapshot-end' }))
+        log(`[ws] backfilled ${snap.length} messages`)
+      } catch (err) {
+        log(`[ws] backfill error: ${err}`)
+      }
     },
     close: (ws) => {
       clients.delete(ws)
@@ -496,27 +510,29 @@ log(`sprite-dialogue: ${url} (logs at ${LOG_FILE}, url at ${URL_FILE})`)
 // Stop / UserPromptSubmit hook scripts (which raced the JSONL flush).
 // ---------------------------------------------------------------------------
 
-const TRANSCRIPTS_ROOT = join(homedir(), '.claude', 'projects')
+// Resolve our project's transcripts dir from claude's cwd. claude (our parent)
+// indexes ~/.claude/projects/<encoded-cwd>/, where encoded = cwd with '/' → '-'.
+// Reading /proc/<ppid>/cwd gives us claude's cwd, not bun's (bun runs from
+// the plugin dir under .mcp.json's CLAUDE_PLUGIN_ROOT).
+function resolveProjectDir(): string {
+  let cwd = process.cwd()
+  try { cwd = readlinkSync(`/proc/${process.ppid}/cwd`) } catch {}
+  return join(homedir(), '.claude', 'projects', cwd.replace(/\//g, '-'))
+}
+
+const PROJECT_DIR = resolveProjectDir()
 const transcriptOffsets = new Map<string, number>()
 const transcriptBuffers = new Map<string, string>()
 const seenTranscripts = new Set<string>()
 let transcriptsInitialized = false
 
 function listTranscripts(): string[] {
-  if (!existsSync(TRANSCRIPTS_ROOT)) return []
-  const out: string[] = []
+  if (!existsSync(PROJECT_DIR)) return []
   try {
-    for (const proj of readdirSync(TRANSCRIPTS_ROOT)) {
-      const dir = join(TRANSCRIPTS_ROOT, proj)
-      try {
-        if (!statSync(dir).isDirectory()) continue
-        for (const f of readdirSync(dir)) {
-          if (f.endsWith('.jsonl')) out.push(join(dir, f))
-        }
-      } catch { /* ignore unreadable project dir */ }
-    }
-  } catch { /* ignore */ }
-  return out
+    return readdirSync(PROJECT_DIR)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => join(PROJECT_DIR, f))
+  } catch { return [] }
 }
 
 function readNewBytes(path: string): string | null {
@@ -564,21 +580,59 @@ function extractText(content: any): string {
     .join('')
 }
 
-function processEntry(entry: any): void {
-  if (!entry || typeof entry !== 'object') return
+type ChatMsg = { id: string; from: 'user' | 'assistant'; text: string; ts: number }
+
+// Convert a JSONL entry into a chat message, applying the same filters used
+// for the live broadcast. Returns null if the entry should not appear in the
+// UI (tool turns, channel echoes, local-command meta, malformed entries).
+// Used by both the live watcher and the on-connect backfill so they can't
+// disagree about what gets shown.
+function entryToMessage(entry: any): ChatMsg | null {
+  if (!entry || typeof entry !== 'object' || !entry.uuid || !entry.timestamp) return null
+  const ts = Date.parse(entry.timestamp)
+  if (!Number.isFinite(ts)) return null
   if (entry.type === 'assistant' && entry.message && Array.isArray(entry.message.content)) {
     const text = extractText(entry.message.content)
-    if (!text.trim()) return
-    broadcast({ type: 'msg', id: nextId(), from: 'assistant', text, ts: Date.now() })
-    log(`[transcript] echoed assistant: ${text.slice(0, 80).replace(/\n/g, ' ')}`)
-  } else if (entry.type === 'user' && entry.message) {
-    const text = extractText(entry.message.content).trim()
-    if (!text) return
-    if (isChannelText(text)) return  // already shown in UI as the original send
-    if (isLocalCommandArtifact(text)) return  // slash-command meta, not chat
-    broadcast({ type: 'msg', id: nextId(), from: 'user', text, ts: Date.now() })
-    log(`[transcript] echoed user: ${text.slice(0, 80).replace(/\n/g, ' ')}`)
+    if (!text.trim()) return null
+    return { id: entry.uuid, from: 'assistant', text, ts }
   }
+  if (entry.type === 'user' && entry.message) {
+    const text = extractText(entry.message.content).trim()
+    if (!text) return null
+    if (isChannelText(text)) return null  // already shown in UI as original send
+    if (isLocalCommandArtifact(text)) return null  // slash-command meta
+    return { id: entry.uuid, from: 'user', text, ts }
+  }
+  return null
+}
+
+function processEntry(entry: any): void {
+  const msg = entryToMessage(entry)
+  if (!msg) return
+  broadcast({ type: 'msg', ...msg })
+  log(`[transcript] echoed ${msg.from}: ${msg.text.slice(0, 80).replace(/\n/g, ' ')}`)
+}
+
+// Read all project JSONLs (union across sessions), parse into messages, sort
+// by entry timestamp, return the most recent `limit` messages. Sent to a
+// newly-connected client so a refresh / reconnect doesn't lose history.
+// Cross-session is intentional: shows continuous project activity rather
+// than a single session's view.
+function buildBackfill(limit = 50): ChatMsg[] {
+  const messages: ChatMsg[] = []
+  for (const path of listTranscripts()) {
+    let content: string
+    try { content = readFileSync(path, 'utf8') } catch { continue }
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const msg = entryToMessage(JSON.parse(line))
+        if (msg) messages.push(msg)
+      } catch { /* skip malformed */ }
+    }
+  }
+  messages.sort((a, b) => a.ts - b.ts)
+  return messages.slice(-limit)
 }
 
 function pollTranscripts(): void {
@@ -617,7 +671,7 @@ function startTranscriptWatcher(): void {
   }
   transcriptsInitialized = true
   setInterval(pollTranscripts, 300)
-  log(`[transcript] watcher started (root=${TRANSCRIPTS_ROOT}, snapshot=${seenTranscripts.size} files)`)
+  log(`[transcript] watcher started (project=${PROJECT_DIR}, snapshot=${seenTranscripts.size} files)`)
 }
 
 startTranscriptWatcher()
@@ -966,6 +1020,7 @@ let reconnectDelay = 500
 let reconnectTimer = null
 let pingTimer = null
 let pongTimer = null
+let inSnapshot = false      // true between snapshot-start / snapshot-end backfill markers
 const outboundQueue = []  // messages to send once WS is open
 
 function wsSend(payload) {
@@ -1031,6 +1086,8 @@ function connect() {
       if (pongTimer) { clearTimeout(pongTimer); pongTimer = null }
       return
     }
+    if (m.type === 'snapshot-start') { inSnapshot = true; return }
+    if (m.type === 'snapshot-end') { inSnapshot = false; scrollToBottom(); return }
     if (m.type === 'msg') addMessage(m)
     if (m.type === 'edit') editMessage(m.id, m.text)
   }
@@ -1054,6 +1111,7 @@ connect()
 // Messages
 // ---------------------------------------------------------------------------
 function addMessage(m) {
+  if (m.id && msgMap[m.id]) return  // dedupe — already shown (e.g. backfill+live overlap)
   const div = document.createElement('div')
   div.className = 'msg msg-' + m.from
 
@@ -1114,7 +1172,9 @@ function addMessage(m) {
   messagesEl.appendChild(div)
   msgMap[m.id] = { el: div, bodyEl: body, text: m.text || '' }
 
-  if (wasNearBottom) scrollToBottom()
+  // During a backfill snapshot, suppress per-message auto-scroll — the
+  // snapshot-end handler does a single scroll-to-bottom after the bulk-append.
+  if (wasNearBottom && !inSnapshot) scrollToBottom()
 }
 
 function editMessage(id, text) {
