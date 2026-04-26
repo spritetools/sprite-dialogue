@@ -49,12 +49,27 @@
     flex-shrink: 0;
   }
   header h1 { font-size: 0.875rem; font-weight: 600; color: var(--accent); }
+  /* Status pill: colored dot + label. JS just toggles .connected on the
+     parent; text + dot color come from CSS so there's no DOM coupling. */
   #status {
-    width: 8px; height: 8px; border-radius: 50%;
+    display: flex;
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    user-select: none;
+  }
+  #status::before {
+    content: '';
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
     background: var(--err);
+    margin-right: 0.4rem;
     transition: background 0.3s;
   }
-  #status.connected { background: var(--ok); }
+  #status::after { content: 'reconnecting…'; }
+  #status.connected::before { background: var(--ok); }
+  #status.connected::after { content: 'connected'; }
 
   /* -- Messages -- */
   #messages {
@@ -65,6 +80,20 @@
     flex-direction: column;
     gap: 0.5rem;
   }
+  /* Empty state — shown only when #messages has no children. Vanishes as soon
+     as the first bubble is appended (backfill or live), so no JS is needed. */
+  #messages:empty::before {
+    content: 'Send a message, paste a screenshot, or drop an image to begin.\A\ACmd+V paste · drag-drop · Attach button';
+    white-space: pre-line;
+    display: block;
+    align-self: center;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    padding: 4rem 2rem;
+    max-width: 28rem;
+    line-height: 1.6;
+  }
 
   .msg {
     max-width: 80%;
@@ -74,14 +103,19 @@
     word-break: break-word;
     position: relative;
   }
+  /* Asymmetric corner near the speaker's "side" — assistant bubbles square the
+     bottom-left, user bubbles square the bottom-right. Reads instantly as
+     sender direction even before the bubble color/alignment register. */
   .msg-assistant {
     align-self: flex-start;
     background: var(--card);
     border: 1px solid var(--border);
+    border-bottom-left-radius: 4px;
   }
   .msg-user {
     align-self: flex-end;
     background: var(--user-bubble);
+    border-bottom-right-radius: 4px;
   }
 
   .msg-meta {
@@ -129,6 +163,30 @@
     border-radius: 0;
     font-size: 1em;
   }
+  /* Copy-to-clipboard button on each rendered code block. The wrapper hosts
+     the absolute positioning so the button doesn't scroll with the pre's
+     overflow-x. Injected by addCopyButtons() after marked renders. */
+  .code-block {
+    position: relative;
+    margin: 0.5rem 0;
+  }
+  .code-block pre { margin: 0; }
+  .copy-btn {
+    position: absolute;
+    top: 0.3rem;
+    right: 0.3rem;
+    font-family: inherit;
+    font-size: 0.7rem;
+    background: rgba(0,0,0,0.4);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+    cursor: pointer;
+    transition: color 0.2s, background 0.2s, border-color 0.2s;
+  }
+  .copy-btn:hover { color: var(--text); background: rgba(0,0,0,0.6); }
+  .copy-btn.copied { color: var(--ok); border-color: var(--ok); }
   .msg-md a { color: var(--accent-hi); text-decoration: underline; }
   .msg-md blockquote {
     border-left: 3px solid var(--border-2);
@@ -231,6 +289,13 @@
     align-items: flex-end;
   }
 
+  /* Text input wrapper hosts the textarea + an absolutely-positioned clear
+     button. The wrapper takes the flex slot so the row layout stays the same. */
+  .text-wrap {
+    flex: 1;
+    position: relative;
+    display: flex;
+  }
   #text {
     flex: 1;
     resize: none;
@@ -246,6 +311,25 @@
     outline: none;
   }
   #text:focus { border-color: var(--accent); }
+  /* Clear button: hidden until the textarea has content. Pushes the textarea's
+     right padding so typed text doesn't slide under the ×. */
+  #clear-text {
+    position: absolute;
+    right: 0.4rem;
+    top: 0.4rem;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0.15rem 0.4rem;
+    cursor: pointer;
+    display: none;
+    border-radius: 4px;
+  }
+  #clear-text:hover { color: var(--text); background: var(--border); }
+  .text-wrap.has-content #clear-text { display: block; }
+  .text-wrap.has-content #text { padding-right: 2rem; }
 
   #compose-actions {
     display: flex;
@@ -313,7 +397,10 @@
     <button type="button" id="preview-remove" onclick="clearPending()">&times;</button>
   </div>
   <div id="compose-row">
-    <textarea id="text" rows="1" placeholder="Message or paste a screenshot..." autocomplete="off"></textarea>
+    <div class="text-wrap">
+      <textarea id="text" rows="1" placeholder="Message or paste a screenshot..." autocomplete="off"></textarea>
+      <button type="button" id="clear-text" onclick="clearText()" title="Clear (Esc)" tabindex="-1">&times;</button>
+    </div>
     <div id="compose-actions">
       <button type="button" class="btn" onclick="document.getElementById('file-input').click()">Attach</button>
       <input type="file" id="file-input" accept="image/*" onchange="handleFileSelect(this)">
@@ -471,6 +558,7 @@ function addMessage(m) {
       a.setAttribute('target', '_blank')
       a.setAttribute('rel', 'noopener')
     })
+    addCopyButtons(body)
   } else {
     body.className = 'msg-text'
     body.textContent = m.text || ''
@@ -513,6 +601,45 @@ function addMessage(m) {
   // During a backfill snapshot, suppress per-message auto-scroll — the
   // snapshot-end handler does a single scroll-to-bottom after the bulk-append.
   if (wasNearBottom && !inSnapshot) scrollToBottom()
+}
+
+// Wrap each rendered code block in a positioning container and inject a small
+// copy-to-clipboard button. Idempotent — safe to call repeatedly on the same
+// container (already-wrapped pres are skipped).
+function addCopyButtons(container) {
+  container.querySelectorAll('pre').forEach(pre => {
+    if (pre.parentElement && pre.parentElement.classList.contains('code-block')) return
+    const wrap = document.createElement('div')
+    wrap.className = 'code-block'
+    pre.parentNode.insertBefore(wrap, pre)
+    wrap.appendChild(pre)
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'copy-btn'
+    btn.title = 'Copy to clipboard'
+    btn.textContent = 'copy'
+    btn.onclick = () => copyCode(btn, pre)
+    wrap.appendChild(btn)
+  })
+}
+
+function copyCode(btn, pre) {
+  const text = pre.textContent || ''
+  const flash = (label, klass) => {
+    btn.textContent = label
+    if (klass) btn.classList.add(klass)
+    setTimeout(() => {
+      btn.textContent = 'copy'
+      if (klass) btn.classList.remove(klass)
+    }, 1200)
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => flash('copied', 'copied'))
+      .catch(() => flash('failed'))
+  } else {
+    flash('failed')
+  }
 }
 
 function editMessage(id, text) {
@@ -658,6 +785,7 @@ function handleSubmit(e) {
 
   textEl.value = ''
   textEl.style.height = ''
+  textEl.parentElement.classList.remove('has-content')
 }
 
 // ---------------------------------------------------------------------------
@@ -666,15 +794,26 @@ function handleSubmit(e) {
 textEl.addEventListener('input', () => {
   textEl.style.height = ''
   textEl.style.height = Math.min(textEl.scrollHeight, 128) + 'px'
+  textEl.parentElement.classList.toggle('has-content', textEl.value.length > 0)
 })
 
-// Enter to send, Shift+Enter for newline
+// Enter to send, Shift+Enter for newline, Esc to clear
 textEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     document.getElementById('compose').requestSubmit()
+  } else if (e.key === 'Escape' && textEl.value.length > 0) {
+    e.preventDefault()
+    clearText()
   }
 })
+
+function clearText() {
+  textEl.value = ''
+  textEl.style.height = ''
+  textEl.parentElement.classList.remove('has-content')
+  textEl.focus()
+}
 </script>
 </body>
 </html>
