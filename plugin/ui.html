@@ -666,6 +666,14 @@ function addMessage(m) {
   messagesEl.appendChild(div)
   msgMap[m.id] = { el: div, bodyEl: body, text: m.text || '' }
 
+  // Pin the activity bubble to the bottom of the stream. Without this it
+  // strands at the position it was first inserted, so any new chat message
+  // that lands during an in-progress burst slides in *below* it and the
+  // bubble looks visually stuck above the latest content.
+  if (activityBubble && activityBubble.parentElement === messagesEl) {
+    messagesEl.appendChild(activityBubble)
+  }
+
   // During a backfill snapshot, suppress per-message auto-scroll — the
   // snapshot-end handler does a single scroll-to-bottom after the bulk-append.
   if (wasNearBottom && !inSnapshot) scrollToBottom()

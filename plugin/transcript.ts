@@ -142,11 +142,13 @@ export function nextActivity(current: Activity, entry: any): Activity {
   if (!entry || typeof entry !== 'object' || !entry.type) return current
 
   if (entry.type === 'user' && entry.message) {
-    const content = entry.message.content
-    const isToolResult = Array.isArray(content) && content.some((b: any) => b?.type === 'tool_result')
-    // Tool-result user entries are continuations of an in-progress burst, not
-    // fresh prompts — they don't transition state on their own.
-    if (isToolResult) return current
+    // Only STRING content is a real new-turn trigger. Array content is either
+    // a tool_result (continuation of an in-progress burst, not a fresh prompt)
+    // or a meta injection (claude code writes these for system reminders,
+    // skill loadings, session init, etc — they'd otherwise spuriously light
+    // up "thinking…" on startup and keep counting until an end_turn that
+    // never comes). Mirrors the same filter in entryToMessage.
+    if (typeof entry.message.content !== 'string') return current
     if (current.state === 'busy') return current
     return { state: 'busy', toolCallCount: 0, latestTool: null, startedAt: timestampMs(entry) }
   }
@@ -173,18 +175,18 @@ export function nextActivity(current: Activity, entry: any): Activity {
       }
     }
 
-    const stop = entry.message.stop_reason
-    if (stop === 'end_turn') {
+    if (entry.message.stop_reason === 'end_turn') {
       if (next.state !== 'idle' || next.toolCallCount !== 0 || next.latestTool !== null || next.startedAt !== null) {
         return { state: 'idle', toolCallCount: 0, latestTool: null, startedAt: null }
       }
       return current
-    } else if (stop && next.state !== 'busy') {
-      if (next === current) next = { ...current }
-      next.state = 'busy'
-      next.startedAt = timestampMs(entry)
     }
 
+    // Other stop_reasons (tool_use, max_tokens, stop_sequence, ...) don't
+    // override state on their own. tool_use is already handled by the loop
+    // above; the rest can fire on synthetic / placeholder entries that don't
+    // represent real claude work (e.g. claude code's "No response requested."
+    // for /exit) and would spuriously light up the activity bubble.
     return next
   }
 

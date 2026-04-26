@@ -253,6 +253,16 @@ describe('nextActivity', () => {
     expect(next).toBe(busy)  // same reference — no change
   })
 
+  test('meta-injection user entry (array of text blocks) does not flip idle → busy', () => {
+    // System reminders, skill loadings, etc. that claude code writes as user
+    // entries with array content. Should be ignored — same filter as in
+    // entryToMessage.
+    const next = nextActivity(IDLE_ACTIVITY, userEntry({
+      message: { content: [{ type: 'text', text: '<system-reminder>...</system-reminder>' }] },
+    }))
+    expect(next).toBe(IDLE_ACTIVITY)
+  })
+
   test('assistant tool_use blocks increment count and update latestTool', () => {
     const a = nextActivity(IDLE_ACTIVITY, assistantEntry([toolUse('Bash', { command: 'ls -la' })], 'tool_use'))
     expect(a.state).toBe('busy')
@@ -322,9 +332,14 @@ describe('nextActivity', () => {
     expect(next.latestTool?.summary).toBe('')
   })
 
-  test('non-end_turn stop_reason (e.g. max_tokens) holds busy', () => {
-    const next = nextActivity(IDLE_ACTIVITY, assistantEntry([text('x')], 'max_tokens'))
-    expect(next.state).toBe('busy')
+  test('non-end_turn non-tool_use stop does NOT flip idle → busy', () => {
+    // Removing the previous fallback that auto-triggered busy on any
+    // non-end_turn stop_reason. That was over-aggressive — it fired on
+    // synthetic entries (e.g. claude code's "No response requested." for
+    // /exit, with model: "<synthetic>" and stop_reason: "stop_sequence")
+    // and spuriously lit up the activity bubble.
+    expect(nextActivity(IDLE_ACTIVITY, assistantEntry([text('x')], 'max_tokens'))).toBe(IDLE_ACTIVITY)
+    expect(nextActivity(IDLE_ACTIVITY, assistantEntry([text('No response requested.')], 'stop_sequence'))).toBe(IDLE_ACTIVITY)
   })
 
   test('malformed entry returns same reference', () => {
