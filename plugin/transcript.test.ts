@@ -146,6 +146,11 @@ describe('entryToMessage', () => {
     expect(entryToMessage(baseAssistant({ type: 'permission-mode' }))).toBeNull()
     expect(entryToMessage(baseAssistant({ type: 'system' }))).toBeNull()
   })
+  test('returns null for user entries with array content (meta injections like /sprite skill loading)', () => {
+    expect(entryToMessage(baseUser({
+      message: { content: [{ type: 'text', text: 'Base directory for this skill: /home/sprite/.claude/skills/sprite\n\nIMPORTANT...' }] },
+    }))).toBeNull()
+  })
   test('returns null for non-object input', () => {
     expect(entryToMessage(null)).toBeNull()
     expect(entryToMessage(undefined)).toBeNull()
@@ -202,18 +207,32 @@ describe('parseEntries', () => {
 })
 
 describe('nextActivity', () => {
+  const TS = '2026-04-26T12:00:00.000Z'
+  const TS_MS = Date.parse(TS)
+
   const userEntry = (overrides: any = {}) => ({
     type: 'user',
+    timestamp: TS,
     message: { content: 'hello' },
     ...overrides,
   })
-  const assistantEntry = (content: any[], stop: string | null = 'end_turn') => ({
+  const assistantEntry = (content: any[], stop: string | null = 'end_turn', timestamp = TS) => ({
     type: 'assistant',
+    timestamp,
     message: { content, stop_reason: stop },
   })
   const toolUse = (name: string, input: any) => ({ type: 'tool_use', name, input })
   const text = (s: string) => ({ type: 'text', text: s })
   const toolResult = (s: string) => ({ type: 'tool_result', content: s })
+
+  // Helper to construct a busy state for tests that don't care about startedAt.
+  const busyAt = (overrides: Partial<Activity> = {}): Activity => ({
+    state: 'busy',
+    toolCallCount: 0,
+    latestTool: null,
+    startedAt: TS_MS,
+    ...overrides,
+  })
 
   test('plain user entry transitions idle → busy', () => {
     const next = nextActivity(IDLE_ACTIVITY, userEntry())
@@ -222,8 +241,14 @@ describe('nextActivity', () => {
     expect(next.latestTool).toBeNull()
   })
 
+  test('records startedAt from entry timestamp on transition to busy', () => {
+    const ts = '2026-04-26T13:30:00.000Z'
+    const next = nextActivity(IDLE_ACTIVITY, userEntry({ timestamp: ts }))
+    expect(next.startedAt).toBe(Date.parse(ts))
+  })
+
   test('tool_result user entry leaves state unchanged', () => {
-    const busy: Activity = { state: 'busy', toolCallCount: 2, latestTool: { name: 'Bash', summary: 'ls' } }
+    const busy = busyAt({ toolCallCount: 2, latestTool: { name: 'Bash', summary: 'ls' } })
     const next = nextActivity(busy, userEntry({ message: { content: [toolResult('ok')] } }))
     expect(next).toBe(busy)  // same reference — no change
   })
@@ -239,6 +264,16 @@ describe('nextActivity', () => {
     expect(b.latestTool).toEqual({ name: 'Read', summary: '/tmp/x.txt' })
   })
 
+  test('startedAt is preserved across subsequent assistant tool_use entries', () => {
+    const start = busyAt({ toolCallCount: 1 })
+    const next = nextActivity(start, assistantEntry(
+      [toolUse('Read', { file_path: '/x' })],
+      'tool_use',
+      '2026-04-26T13:30:00.000Z',  // later timestamp
+    ))
+    expect(next.startedAt).toBe(TS_MS)  // unchanged from original busy
+  })
+
   test('multiple tool_use blocks in one entry are all counted', () => {
     const next = nextActivity(IDLE_ACTIVITY, assistantEntry([
       toolUse('Bash', { command: 'ls' }),
@@ -249,10 +284,10 @@ describe('nextActivity', () => {
     expect(next.latestTool).toEqual({ name: 'Grep', summary: 'foo' })
   })
 
-  test('end_turn assistant entry resets to idle', () => {
-    const busy: Activity = { state: 'busy', toolCallCount: 5, latestTool: { name: 'Bash', summary: 'x' } }
+  test('end_turn assistant entry resets to idle including startedAt', () => {
+    const busy = busyAt({ toolCallCount: 5, latestTool: { name: 'Bash', summary: 'x' } })
     const next = nextActivity(busy, assistantEntry([text('done')], 'end_turn'))
-    expect(next).toEqual({ state: 'idle', toolCallCount: 0, latestTool: null })
+    expect(next).toEqual({ state: 'idle', toolCallCount: 0, latestTool: null, startedAt: null })
   })
 
   test('end_turn from already-idle returns same reference', () => {
@@ -261,7 +296,7 @@ describe('nextActivity', () => {
   })
 
   test('plain user entry while already busy returns same reference', () => {
-    const busy: Activity = { state: 'busy', toolCallCount: 3, latestTool: null }
+    const busy = busyAt({ toolCallCount: 3 })
     const next = nextActivity(busy, userEntry())
     expect(next).toBe(busy)
   })

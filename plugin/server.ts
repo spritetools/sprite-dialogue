@@ -588,6 +588,7 @@ function activityMessage(): Record<string, unknown> {
         state: 'busy',
         toolCallCount: activity.toolCallCount,
         latestTool: activity.latestTool,
+        startedAt: activity.startedAt,
       }
 }
 

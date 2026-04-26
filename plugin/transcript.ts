@@ -54,7 +54,13 @@ export function entryToMessage(entry: any): ChatMsg | null {
     return { id: entry.uuid, from: 'assistant', text, ts }
   }
   if (entry.type === 'user' && entry.message) {
-    const text = extractText(entry.message.content).trim()
+    // Real user input (terminal, web UI, slash-command artifacts) always has
+    // STRING content. Array content with text blocks indicates a meta injection
+    // — slash-command-invoked skills (e.g. /sprite), system reminders, etc. —
+    // which claude code synthesizes for its own consumption, not chat content.
+    // Tool-result arrays were already dropped by extractText returning ''.
+    if (typeof entry.message.content !== 'string') return null
+    const text = entry.message.content.trim()
     if (!text) return null
     if (isChannelText(text)) return null
     if (isLocalCommandArtifact(text)) return null
@@ -95,9 +101,15 @@ export type Activity = {
   state: 'busy' | 'idle'
   toolCallCount: number  // count of tool_use blocks since the last end_turn
   latestTool: { name: string; summary: string } | null
+  startedAt: number | null  // ms since epoch when the burst began; null when idle
 }
 
-export const IDLE_ACTIVITY: Activity = { state: 'idle', toolCallCount: 0, latestTool: null }
+export const IDLE_ACTIVITY: Activity = { state: 'idle', toolCallCount: 0, latestTool: null, startedAt: null }
+
+function timestampMs(entry: any): number {
+  const ts = entry?.timestamp ? Date.parse(entry.timestamp) : NaN
+  return Number.isFinite(ts) ? ts : Date.now()
+}
 
 // Per-tool: which input field is the most useful to show as a one-line summary.
 // Anything not listed here falls through to JSON.stringify(input).
@@ -136,7 +148,7 @@ export function nextActivity(current: Activity, entry: any): Activity {
     // fresh prompts — they don't transition state on their own.
     if (isToolResult) return current
     if (current.state === 'busy') return current
-    return { state: 'busy', toolCallCount: 0, latestTool: null }
+    return { state: 'busy', toolCallCount: 0, latestTool: null, startedAt: timestampMs(entry) }
   }
 
   if (entry.type === 'assistant' && entry.message) {
@@ -151,20 +163,26 @@ export function nextActivity(current: Activity, entry: any): Activity {
             name: String(block.name ?? '?'),
             summary: summarizeToolInput(block.name, block.input),
           }
-          next.state = 'busy'
+          if (next.state !== 'busy') {
+            next.state = 'busy'
+            // First sign of busy with no preceding user-trigger (e.g. bun
+            // started mid-burst) — fall back to this entry's timestamp.
+            next.startedAt = timestampMs(entry)
+          }
         }
       }
     }
 
     const stop = entry.message.stop_reason
     if (stop === 'end_turn') {
-      if (next.state !== 'idle' || next.toolCallCount !== 0 || next.latestTool !== null) {
-        return { state: 'idle', toolCallCount: 0, latestTool: null }
+      if (next.state !== 'idle' || next.toolCallCount !== 0 || next.latestTool !== null || next.startedAt !== null) {
+        return { state: 'idle', toolCallCount: 0, latestTool: null, startedAt: null }
       }
       return current
     } else if (stop && next.state !== 'busy') {
       if (next === current) next = { ...current }
       next.state = 'busy'
+      next.startedAt = timestampMs(entry)
     }
 
     return next

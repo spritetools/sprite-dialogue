@@ -119,24 +119,33 @@
   }
 
   /* Activity bubble — singleton ephemeral bubble shown while claude is mid-burst.
-     Visually distinct from real bubbles: dashed orange border, faint orange
-     wash, slow opacity pulse. Updated in place by updateActivity(); removed
+     Visually distinct from real bubbles: dashed orange border, orange wash,
+     pronounced pulse on opacity + bg + border so it reads as "alive" without
+     having to look closely. Updated in place by updateActivity(); removed
      entirely on idle (its content was a status, not a record). */
   .msg-activity {
     align-self: flex-start;
-    background: rgba(226, 115, 62, 0.10);
-    border: 1px dashed var(--accent);
+    border-style: dashed;
+    border-width: 1px;
     border-bottom-left-radius: 4px;
     color: var(--text-2);
     display: flex;
     align-items: center;
     gap: 0.6rem;
     font-size: 0.8125rem;
-    animation: activity-pulse 2.2s ease-in-out infinite;
+    animation: activity-pulse 1.5s ease-in-out infinite;
   }
   @keyframes activity-pulse {
-    0%, 100% { opacity: 0.78; }
-    50%      { opacity: 1; }
+    0%, 100% {
+      opacity: 0.7;
+      background: rgba(226, 115, 62, 0.04);
+      border-color: rgba(226, 115, 62, 0.45);
+    }
+    50% {
+      opacity: 1;
+      background: rgba(226, 115, 62, 0.22);
+      border-color: rgba(226, 115, 62, 1);
+    }
   }
   .activity-text { display: flex; align-items: center; gap: 0.4rem; min-width: 0; flex: 1; }
   .activity-count { color: var(--accent); font-weight: 600; white-space: nowrap; }
@@ -148,6 +157,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+  }
+  .activity-elapsed {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .activity-bell {
     background: none;
@@ -707,14 +723,18 @@ function copyCode(btn, pre) {
 let activityBubble = null
 let activityArmed = false
 let activityState = 'idle'
+let activityStartedAt = null
+let activityElapsedTimer = null
 
 function updateActivity(m) {
   const wasBusy = activityState === 'busy'
   activityState = m.state
   if (m.state === 'busy') {
+    activityStartedAt = m.startedAt || activityStartedAt || Date.now()
     showActivity(m.toolCallCount || 0, m.latestTool || null)
   } else {
     hideActivity()
+    activityStartedAt = null
     if (wasBusy && activityArmed) {
       activityArmed = false
       playChime()
@@ -723,11 +743,6 @@ function updateActivity(m) {
 }
 
 function showActivity(count, latestTool) {
-  // Don't render the bubble until there's something useful to say. Pure
-  // text-only turns flip BUSY → IDLE without ever calling a tool, and a bare
-  // "0 tool calls" bubble would just flash and vanish.
-  if (count === 0 && !latestTool) return
-
   if (!activityBubble) {
     activityBubble = document.createElement('div')
     activityBubble.className = 'msg msg-activity'
@@ -740,6 +755,9 @@ function showActivity(count, latestTool) {
     toolEl.className = 'activity-tool'
     text.appendChild(toolEl)
     activityBubble.appendChild(text)
+    const elapsedEl = document.createElement('span')
+    elapsedEl.className = 'activity-elapsed'
+    activityBubble.appendChild(elapsedEl)
     const bell = document.createElement('button')
     bell.type = 'button'
     bell.className = 'activity-bell'
@@ -750,15 +768,49 @@ function showActivity(count, latestTool) {
     const wasNearBottom = isNearBottom()
     messagesEl.appendChild(activityBubble)
     if (wasNearBottom && !inSnapshot) scrollToBottom()
+    // Update the elapsed display once a second. Reads activityStartedAt
+    // (module-scoped) so the value stays accurate if the server resends it.
+    updateElapsedDisplay()
+    activityElapsedTimer = setInterval(updateElapsedDisplay, 1000)
   }
 
   const countEl = activityBubble.querySelector('.activity-count')
   const toolEl = activityBubble.querySelector('.activity-tool')
-  countEl.textContent = count + ' tool ' + (count === 1 ? 'call' : 'calls')
-  toolEl.textContent = latestTool ? '· ' + latestTool.name + ': ' + truncate(latestTool.summary, 40) : ''
+  if (count === 0) {
+    // Pre-tool-call window: claude is "thinking" — generating text or deciding
+    // what to do next. Same period claude code itself shows "Precipitating…" for.
+    countEl.textContent = 'thinking…'
+    toolEl.textContent = ''
+  } else {
+    countEl.textContent = count + ' tool ' + (count === 1 ? 'call' : 'calls')
+    toolEl.textContent = latestTool ? '· ' + latestTool.name + ': ' + truncate(latestTool.summary, 40) : ''
+  }
+  updateElapsedDisplay()
+}
+
+function updateElapsedDisplay() {
+  if (!activityBubble || activityStartedAt == null) return
+  const seconds = Math.max(0, Math.floor((Date.now() - activityStartedAt) / 1000))
+  activityBubble.querySelector('.activity-elapsed').textContent = formatDuration(seconds)
+}
+
+function formatDuration(s) {
+  if (s < 60) return s + 's'
+  if (s < 3600) {
+    const m = Math.floor(s / 60)
+    const sec = s % 60
+    return m + 'm' + (sec < 10 ? '0' : '') + sec + 's'
+  }
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return h + 'h' + (m < 10 ? '0' : '') + m + 'm'
 }
 
 function hideActivity() {
+  if (activityElapsedTimer) {
+    clearInterval(activityElapsedTimer)
+    activityElapsedTimer = null
+  }
   if (activityBubble) {
     activityBubble.remove()
     activityBubble = null
@@ -781,22 +833,32 @@ function truncate(s, n) {
 
 // Brief synthesized "ding" via Web Audio. The user's click on the bell counts
 // as the activation gesture, so the autoplay policy doesn't block us.
+//
+// Volume is tunable via CHIME_VOLUME (0–1, peak gain). Pure sine waves sound
+// quieter than they really are because they have no harmonic content; we
+// stack the fundamental with an octave above (at lower amplitude, faster
+// decay) so the chime cuts through without feeling shrill.
+const CHIME_VOLUME = 1.0
 function playChime() {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext
     if (!Ctx) return
     const ctx = new Ctx()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.frequency.value = 880  // A5
     const t = ctx.currentTime
-    gain.gain.setValueAtTime(0.001, t)
-    gain.gain.exponentialRampToValueAtTime(0.25, t + 0.02)
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.55)
-    osc.start(t)
-    osc.stop(t + 0.6)
+    const tone = (freq, peak, duration) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0.001, t)
+      gain.gain.exponentialRampToValueAtTime(peak, t + 0.02)
+      gain.gain.exponentialRampToValueAtTime(0.001, t + duration)
+      osc.start(t)
+      osc.stop(t + duration + 0.05)
+    }
+    tone(880, CHIME_VOLUME, 0.55)            // fundamental (A5)
+    tone(1760, CHIME_VOLUME * 0.4, 0.35)     // octave above, fades first
   } catch (err) { console.warn('chime failed:', err) }
 }
 
